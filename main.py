@@ -1,10 +1,13 @@
 import os
+from typing import Any
 from dotenv import load_dotenv
 
 from langchain import hub
 from langchain_openai import ChatOpenAI
+from langchain_core.tools import Tool
 from langchain.agents import create_react_agent, AgentExecutor
 from langchain_experimental.tools import PythonREPLTool
+from langchain_experimental.agents.agent_toolkits import create_csv_agent
 
 load_dotenv()
 
@@ -25,18 +28,61 @@ def main():
     tools = [PythonREPLTool()]
     python_agent = create_react_agent(
         prompt=prompt,
-        llm=ChatOpenAI(temperature=0, model="gpt-4o-mini"),
+        llm=ChatOpenAI(temperature=0, model="gpt-4o"),
         tools=tools,
     )
 
     python_agent_executor = AgentExecutor(agent=python_agent, tools=tools, verbose=True,
                                           handle_parsing_errors=True)
 
+    csv_agent_executor: AgentExecutor = create_csv_agent(
+        llm=ChatOpenAI(temperature=0, model="gpt-4o"),
+        path="data/episode_info.csv",
+        verbose=True,
+        allow_dangerous_code=True
+    )
+
+    def python_agent_executor_wrapper(original_prompt: str) -> dict[str, Any]:
+        return python_agent_executor.invoke({"input": original_prompt})
+
+    tools = [
+        Tool(
+            name="Python Agent",
+            func=python_agent_executor_wrapper,
+            description="""useful when you need to transform natural language to python and execute the python code,
+                          returning the results of the code execution
+                          DOES NOT ACCEPT CODE AS INPUT""",
+        ),
+        Tool(
+            name="CSV Agent",
+            func=csv_agent_executor.invoke,
+            description="""useful when you need to answer question over episode_info.csv file,
+                         takes an input the entire question and returns the answer after running pandas calculations""",
+        ),
+    ]
+
+    prompt = base_prompt.partial(instructions="")
+    grand_agent = create_react_agent(
+        prompt=prompt,
+        llm=ChatOpenAI(temperature=0, model="gpt-4o"),
+        tools=tools,
+    )
+    grand_agent_executor = AgentExecutor(agent=grand_agent, tools=tools, verbose=True)
+
+    query1 = "Analyze episode_info.csv in the data folder to see which season has the most episodes?"
+    print(f"FIRST QUERY: {query1} \n")
     print(
-        python_agent_executor.invoke(
-            {
-                "input": "Generate and save in current working directory 3 qrcodes that point to `www.langchain.com`",
-            }
+        grand_agent_executor.invoke(
+            {"input": query1}
+        )
+    )
+
+    query2 = "Generate and save in ./data directory 3 qrcodes that point to `www.udemy.com/course/langchain`"
+    print(f"\nSECOND QUERY: {query2} \n")
+
+    print(
+        grand_agent_executor.invoke(
+            {"input": query2,}
         )
     )
 
